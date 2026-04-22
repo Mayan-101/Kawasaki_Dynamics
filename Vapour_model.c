@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
+#include <omp.h>
 #include "utils/pcg_random.h"
 
 #define WIDTH 600
@@ -21,23 +22,58 @@ static inline int wrap(int i, int max)
 
 void update_grid(int *grid, int height, int width, double T)
 {
-    for (int n = 0; n < height * width; n++)
+#pragma omp parallel
     {
-        int x = pcg_rand_bounded(width);
-        int y = pcg_rand_bounded(height);
-        int current = grid[IDX(x, y)];
-
-        int left = grid[IDX(wrap(x - 1, width), y)];
-        int right = grid[IDX(wrap(x + 1, width), y)];
-        int up = grid[IDX(x, wrap(y - 1, height))];
-        int down = grid[IDX(x, wrap(y + 1, height))];
-
-        int neighbor_sum = left + right + up + down;
-        int delta_E = 2 * current * neighbor_sum;
-
-        if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
+        uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
+        pcg_seed(seed, 42);
+#pragma omp for
+        for (int idx = 0; idx < height * width; idx++)
         {
-            grid[IDX(x, y)] = -current;
+            int x = idx % width;
+            int y = idx / width;
+            if (((x + y) & 1) != 0)
+                continue;
+            int current = grid[IDX(x, y)];
+
+            int left = grid[IDX(wrap(x - 1, width), y)];
+            int right = grid[IDX(wrap(x + 1, width), y)];
+            int up = grid[IDX(x, wrap(y - 1, height))];
+            int down = grid[IDX(x, wrap(y + 1, height))];
+
+            int neighbor_sum = left + right + up + down;
+            int delta_E = 2 * current * neighbor_sum;
+
+            if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
+            {
+                grid[IDX(x, y)] = -current;
+            }
+        }
+    }
+#pragma omp parallel
+    {
+        uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
+        pcg_seed(seed, 42);
+#pragma omp for
+        for (int idx = 0; idx < height * width; idx++)
+        {
+            int x = idx % width;
+            int y = idx / width;
+            if (((x + y) & 1) != 1)
+                continue;
+            int current = grid[IDX(x, y)];
+
+            int left = grid[IDX(wrap(x - 1, width), y)];
+            int right = grid[IDX(wrap(x + 1, width), y)];
+            int up = grid[IDX(x, wrap(y - 1, height))];
+            int down = grid[IDX(x, wrap(y + 1, height))];
+
+            int neighbor_sum = left + right + up + down;
+            int delta_E = 2 * current * neighbor_sum;
+
+            if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
+            {
+                grid[IDX(x, y)] = -current;
+            }
         }
     }
 }
@@ -73,10 +109,11 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
 
 int main(int argc, char *argv[])
 {
-    // RNG seed
-    static uint64_t seed_sequence = 0;
-    pcg_seed((uint64_t)time(NULL) ^ (++seed_sequence), 42);
-
+#pragma omp parallel
+    {
+#pragma omp single
+        printf("Running with %d OpenMP threads\n", omp_get_num_threads());
+    }
     // Allocate grid
     int *grid = (int *)malloc(HEIGHT * WIDTH * sizeof(int));
     if (!grid)

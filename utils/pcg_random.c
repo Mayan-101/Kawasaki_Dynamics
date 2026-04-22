@@ -1,9 +1,12 @@
-// pcg_basic.c
 #include "pcg_random.h"
+#include <omp.h>   // Required for threadprivate
 
-// Define thread-local storage
-_Thread_local uint64_t pcg_state = 0x853c49e6748fea9bULL;
-_Thread_local uint64_t pcg_inc   = 0xda3e39cb94b95bdbULL;
+// Define the global variables
+uint64_t pcg_state;
+uint64_t pcg_inc;
+
+// Apply threadprivate directive to the definitions
+#pragma omp threadprivate(pcg_state, pcg_inc)
 
 void pcg_seed(uint64_t initstate, uint64_t initseq) {
     pcg_state = 0U;
