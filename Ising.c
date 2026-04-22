@@ -13,85 +13,79 @@
 
 
 #define IDX(x, y) ((y) * WIDTH + (x))
-static inline int get_neighbor(int* grid, int width, int height, int x, int y) {
-    if (x < 0 || x >= width || y < 0 || y >= height) {
-        return 1;  
-    }
-    return grid[IDX(x, y)];
+
+
+// Periodic boundary helper
+static inline int wrap(int i, int max)
+{
+    return (i + max) % max;
 }
 
-
-void update_grid(int* grid, int height, int width, double T) {
-    // Only iterate over interior (x from 1 to width-2, y from 1 to height-2)
-    int interior_width  = width - 2;
-    int interior_height = height - 2;
-    int total_interior = interior_width * interior_height;
-
-    // Phase 1: Black (even parity) interior spins
-    #pragma omp parallel
+void update_grid(int *grid, int height, int width, double T)
+{
+#pragma omp parallel
     {
         uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
         pcg_seed(seed, 42);
+#pragma omp for
+        for (int idx = 0; idx < height * width; idx++)
+        {
+            int x = idx % width;
+            int y = idx / width;
+            if (((x + y) & 1) != 0)
+                continue;
+            int current = grid[IDX(x, y)];
 
-        #pragma omp for collapse(2)
-        for (int iy = 0; iy < interior_height; iy++) {
-            for (int ix = 0; ix < interior_width; ix++) {
-                int x = ix + 1;
-                int y = iy + 1;
-                if (((x + y) & 1) != 0) continue;   // Black only
+            int left = grid[IDX(wrap(x - 1, width), y)];
+            int right = grid[IDX(wrap(x + 1, width), y)];
+            int up = grid[IDX(x, wrap(y - 1, height))];
+            int down = grid[IDX(x, wrap(y + 1, height))];
 
-                int current = grid[IDX(x, y)];
-                int left   = get_neighbor(grid, width, height, x - 1, y);
-                int right  = get_neighbor(grid, width, height, x + 1, y);
-                int up     = get_neighbor(grid, width, height, x, y - 1);
-                int down   = get_neighbor(grid, width, height, x, y + 1);
+            int neighbor_sum = left + right + up + down;
+            int delta_E = 2 * current * neighbor_sum;
 
-                int neighbor_sum = left + right + up + down;
-                int delta_E = 2 * current * neighbor_sum;
-
-                if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
-                    grid[IDX(x, y)] = -current;
+            if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
+            {
+                grid[IDX(x, y)] = -current;
             }
         }
     }
-
-    
-    #pragma omp parallel
+#pragma omp parallel
     {
         uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
         pcg_seed(seed, 42);
+#pragma omp for
+        for (int idx = 0; idx < height * width; idx++)
+        {
+            int x = idx % width;
+            int y = idx / width;
+            if (((x + y) & 1) != 1)
+                continue;
+            int current = grid[IDX(x, y)];
 
-        #pragma omp for collapse(2)
-        for (int iy = 0; iy < interior_height; iy++) {
-            for (int ix = 0; ix < interior_width; ix++) {
-                int x = ix + 1;
-                int y = iy + 1;
-                if (((x + y) & 1) != 1) continue;   
+            int left = grid[IDX(wrap(x - 1, width), y)];
+            int right = grid[IDX(wrap(x + 1, width), y)];
+            int up = grid[IDX(x, wrap(y - 1, height))];
+            int down = grid[IDX(x, wrap(y + 1, height))];
 
-                int current = grid[IDX(x, y)];
-                int left   = get_neighbor(grid, width, height, x - 1, y);
-                int right  = get_neighbor(grid, width, height, x + 1, y);
-                int up     = get_neighbor(grid, width, height, x, y - 1);
-                int down   = get_neighbor(grid, width, height, x, y + 1);
+            int neighbor_sum = left + right + up + down;
+            int delta_E = 2 * current * neighbor_sum;
 
-                int neighbor_sum = left + right + up + down;
-                int delta_E = 2 * current * neighbor_sum;
-
-                if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
-                    grid[IDX(x, y)] = -current;
+            if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
+            {
+                grid[IDX(x, y)] = -current;
             }
         }
     }
 }
 
-void init_random_grid(int* grid, int height, int width) {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-                grid[IDX(x, y)] = (pcg_rand_bounded(1) == 0) ? -1 : 1;
-        }
+void init_random_grid(int *grid, int height, int width)
+{
+    for (int i = 0; i < height * width; i++)
+    {
+        grid[i] = (pcg_rand_bounded(1) == 0) ? -1 : 1;
     }
 }
-
 // Render text on screen
 void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x, int y)
 {
