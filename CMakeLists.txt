@@ -10,7 +10,7 @@ pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(SDL2_ttf REQUIRED)
 find_package(OpenMP REQUIRED)
 add_executable(Kawasaki_Dynamics
-    Vapour_model.c
+    Ising.c
     utils/pcg_random.c
 )
 
