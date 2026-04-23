@@ -19,12 +19,8 @@ static inline int wrap(int i, int max)
     return (i + max) % max;
 }
 
-// h > 0 favours spin-up (+1), h < 0 favours spin-down (-1)
-// Full ΔE for flipping spin s_i:
-//   ΔE = 2·s_i·(Σ neighbours) + 2·h·s_i
 void update_grid(int *grid, int height, int width, double T, double h)
 {
-    // --- even sub-lattice ---
 #pragma omp parallel
     {
         uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
@@ -37,13 +33,9 @@ void update_grid(int *grid, int height, int width, double T, double h)
             if (((x + y) & 1) != 0)
                 continue;
 
-            int current      = grid[IDX(x, y)];
-            int neighbor_sum = grid[IDX(wrap(x - 1, width), y)]
-                             + grid[IDX(wrap(x + 1, width), y)]
-                             + grid[IDX(x, wrap(y - 1, height))]
-                             + grid[IDX(x, wrap(y + 1, height))];
+            int current = grid[IDX(x, y)];
+            int neighbor_sum = grid[IDX(wrap(x - 1, width), y)] + grid[IDX(wrap(x + 1, width), y)] + grid[IDX(x, wrap(y - 1, height))] + grid[IDX(x, wrap(y + 1, height))];
 
-            // Include external field term: -h·s → flipping costs +2·h·s
             double delta_E = 2.0 * current * (neighbor_sum + h);
 
             if (delta_E <= 0.0 || (T > 0.0 && pcg_rand_double() < exp(-delta_E / T)))
@@ -53,7 +45,6 @@ void update_grid(int *grid, int height, int width, double T, double h)
         }
     }
 
-    // --- odd sub-lattice ---
 #pragma omp parallel
     {
         uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
@@ -66,11 +57,8 @@ void update_grid(int *grid, int height, int width, double T, double h)
             if (((x + y) & 1) != 1)
                 continue;
 
-            int current      = grid[IDX(x, y)];
-            int neighbor_sum = grid[IDX(wrap(x - 1, width), y)]
-                             + grid[IDX(wrap(x + 1, width), y)]
-                             + grid[IDX(x, wrap(y - 1, height))]
-                             + grid[IDX(x, wrap(y + 1, height))];
+            int current = grid[IDX(x, y)];
+            int neighbor_sum = grid[IDX(wrap(x - 1, width), y)] + grid[IDX(wrap(x + 1, width), y)] + grid[IDX(x, wrap(y - 1, height))] + grid[IDX(x, wrap(y + 1, height))];
 
             double delta_E = 2.0 * current * (neighbor_sum + h);
 
@@ -179,12 +167,11 @@ int main(int argc, char *argv[])
 
     uint32_t *pixel_buffer = (uint32_t *)malloc(WIDTH * HEIGHT * sizeof(uint32_t));
 
-    // --- simulation parameters ---
-    double T        = 1.5;
-    double h        = 0.0;   // external magnetic field
+    double T = 1.5;
+    double h = 0.0;
 
-    const double T_MIN  = 0.0,  T_MAX  = 5.0,  T_STEP  = 0.1;
-    const double H_MIN  = -5.0, H_MAX  = 5.0,  H_STEP  = 0.1;
+    const double T_MIN = 0.0, T_MAX = 5.0, T_STEP = 0.1;
+    const double H_MIN = -5.0, H_MAX = 5.0, H_STEP = 0.1;
 
     int running = 1;
     SDL_Event event;
@@ -204,20 +191,24 @@ int main(int argc, char *argv[])
                 // Temperature: UP / DOWN
                 case SDLK_UP:
                     T += T_STEP;
-                    if (T > T_MAX) T = T_MAX;
+                    if (T > T_MAX)
+                        T = T_MAX;
                     break;
                 case SDLK_DOWN:
                     T -= T_STEP;
-                    if (T < T_MIN) T = T_MIN;
+                    if (T < T_MIN)
+                        T = T_MIN;
                     break;
                 // Magnetic field: RIGHT / LEFT
                 case SDLK_RIGHT:
                     h += H_STEP;
-                    if (h > H_MAX) h = H_MAX;
+                    if (h > H_MAX)
+                        h = H_MAX;
                     break;
                 case SDLK_LEFT:
                     h -= H_STEP;
-                    if (h < H_MIN) h = H_MIN;
+                    if (h < H_MIN)
+                        h = H_MIN;
                     break;
                 }
             }
@@ -233,11 +224,15 @@ int main(int argc, char *argv[])
                 uint8_t r, g, b;
                 if (grid[IDX(x, y)] == 1)
                 {
-                    r = 255; g = 045; b = 001;   // spin-up  → orange-red
+                    r = 255;
+                    g = 045;
+                    b = 001; // spin-up  → orange-red
                 }
                 else
                 {
-                    r = 073; g = 016; b = 230;   // spin-down → blue-purple
+                    r = 073;
+                    g = 016;
+                    b = 230; // spin-down → blue-purple
                 }
                 pixel_buffer[y * WIDTH + x] = (255u << 24) | (b << 16) | (g << 8) | r;
             }
@@ -250,10 +245,10 @@ int main(int argc, char *argv[])
         // HUD: temperature (top-left) and magnetic field (below it)
         char temp_text[32];
         char field_text[32];
-        snprintf(temp_text,  sizeof(temp_text),  "T = %.2f  [Up/Down]",    T);
+        snprintf(temp_text, sizeof(temp_text), "T = %.2f  [Up/Down]", T);
         snprintf(field_text, sizeof(field_text), "B = %+.2f  [Left/Right]", h);
-        render_text(renderer, font, temp_text,  10, 10);
-        render_text(renderer, font, field_text, 10, 40);   // 30 px below T line
+        render_text(renderer, font, temp_text, 10, 10);
+        render_text(renderer, font, field_text, 10, 40); // 30 px below T line
 
         SDL_RenderPresent(renderer);
         SDL_Delay(10);
