@@ -8,12 +8,10 @@
 #include <omp.h>
 #include "utils/pcg_random.h"
 
-#define WIDTH 600
-#define HEIGHT 600
-
+#define WIDTH 800
+#define HEIGHT 800
 
 #define IDX(x, y) ((y) * WIDTH + (x))
-
 
 // Periodic boundary helper
 static inline int wrap(int i, int max)
@@ -21,8 +19,12 @@ static inline int wrap(int i, int max)
     return (i + max) % max;
 }
 
-void update_grid(int *grid, int height, int width, double T)
+// h > 0 favours spin-up (+1), h < 0 favours spin-down (-1)
+// Full ΔE for flipping spin s_i:
+//   ΔE = 2·s_i·(Σ neighbours) + 2·h·s_i
+void update_grid(int *grid, int height, int width, double T, double h)
 {
+    // --- even sub-lattice ---
 #pragma omp parallel
     {
         uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
@@ -34,22 +36,24 @@ void update_grid(int *grid, int height, int width, double T)
             int y = idx / width;
             if (((x + y) & 1) != 0)
                 continue;
-            int current = grid[IDX(x, y)];
 
-            int left = grid[IDX(wrap(x - 1, width), y)];
-            int right = grid[IDX(wrap(x + 1, width), y)];
-            int up = grid[IDX(x, wrap(y - 1, height))];
-            int down = grid[IDX(x, wrap(y + 1, height))];
+            int current      = grid[IDX(x, y)];
+            int neighbor_sum = grid[IDX(wrap(x - 1, width), y)]
+                             + grid[IDX(wrap(x + 1, width), y)]
+                             + grid[IDX(x, wrap(y - 1, height))]
+                             + grid[IDX(x, wrap(y + 1, height))];
 
-            int neighbor_sum = left + right + up + down;
-            int delta_E = 2 * current * neighbor_sum;
+            // Include external field term: -h·s → flipping costs +2·h·s
+            double delta_E = 2.0 * current * (neighbor_sum + h);
 
-            if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
+            if (delta_E <= 0.0 || (T > 0.0 && pcg_rand_double() < exp(-delta_E / T)))
             {
                 grid[IDX(x, y)] = -current;
             }
         }
     }
+
+    // --- odd sub-lattice ---
 #pragma omp parallel
     {
         uint64_t seed = (uint64_t)time(NULL) ^ (omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
@@ -61,17 +65,16 @@ void update_grid(int *grid, int height, int width, double T)
             int y = idx / width;
             if (((x + y) & 1) != 1)
                 continue;
-            int current = grid[IDX(x, y)];
 
-            int left = grid[IDX(wrap(x - 1, width), y)];
-            int right = grid[IDX(wrap(x + 1, width), y)];
-            int up = grid[IDX(x, wrap(y - 1, height))];
-            int down = grid[IDX(x, wrap(y + 1, height))];
+            int current      = grid[IDX(x, y)];
+            int neighbor_sum = grid[IDX(wrap(x - 1, width), y)]
+                             + grid[IDX(wrap(x + 1, width), y)]
+                             + grid[IDX(x, wrap(y - 1, height))]
+                             + grid[IDX(x, wrap(y + 1, height))];
 
-            int neighbor_sum = left + right + up + down;
-            int delta_E = 2 * current * neighbor_sum;
+            double delta_E = 2.0 * current * (neighbor_sum + h);
 
-            if (delta_E <= 0 || pcg_rand_double() < exp(-delta_E / T))
+            if (delta_E <= 0.0 || (T > 0.0 && pcg_rand_double() < exp(-delta_E / T)))
             {
                 grid[IDX(x, y)] = -current;
             }
@@ -86,13 +89,14 @@ void init_random_grid(int *grid, int height, int width)
         grid[i] = (pcg_rand_bounded(1) == 0) ? -1 : 1;
     }
 }
-// Render text on screen
+
+// Render a single line of text at (x, y)
 void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x, int y)
 {
     if (!font)
         return;
-    SDL_Color white = {0, 255, 0, 255};
-    SDL_Surface *surface = TTF_RenderText_Solid(font, text, white);
+    SDL_Color green = {0, 255, 0, 255};
+    SDL_Surface *surface = TTF_RenderText_Solid(font, text, green);
     if (!surface)
         return;
     SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
@@ -114,7 +118,7 @@ int main(int argc, char *argv[])
 #pragma omp single
         printf("Running with %d OpenMP threads\n", omp_get_num_threads());
     }
-    // Allocate grid
+
     int *grid = (int *)malloc(HEIGHT * WIDTH * sizeof(int));
     if (!grid)
     {
@@ -123,7 +127,6 @@ int main(int argc, char *argv[])
     }
     init_random_grid(grid, HEIGHT, WIDTH);
 
-    // SDL Initialization
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
         fprintf(stderr, "SDL_Init Error: %s\n", SDL_GetError());
@@ -131,11 +134,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Initialize SDL_ttf
     if (TTF_Init() < 0)
-    {
         fprintf(stderr, "TTF_Init Error: %s\n", TTF_GetError());
-    }
 
     SDL_Window *window = SDL_CreateWindow("Ising Model",
                                           SDL_WINDOWPOS_CENTERED,
@@ -149,8 +149,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
-                                                SDL_RENDERER_ACCELERATED);
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer)
     {
         SDL_DestroyWindow(window);
@@ -161,9 +160,7 @@ int main(int argc, char *argv[])
 
     TTF_Font *font = TTF_OpenFont("C:/Windows/Fonts/consola.ttf", 24);
     if (!font)
-    {
         fprintf(stderr, "Font loading failed: %s\n", TTF_GetError());
-    }
 
     SDL_Texture *texture = SDL_CreateTexture(renderer,
                                              SDL_PIXELFORMAT_RGBA32,
@@ -180,20 +177,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Main loop
-    int running = 1;
-    SDL_Event event;
     uint32_t *pixel_buffer = (uint32_t *)malloc(WIDTH * HEIGHT * sizeof(uint32_t));
 
-    // Temperature variable
-    double T = 1.5;
-    const double T_MIN = 0.0;
-    const double T_MAX = 5.0;
-    const double T_STEP = 0.1;
+    // --- simulation parameters ---
+    double T        = 1.5;
+    double h        = 0.0;   // external magnetic field
+
+    const double T_MIN  = 0.0,  T_MAX  = 5.0,  T_STEP  = 0.1;
+    const double H_MIN  = -5.0, H_MAX  = 5.0,  H_STEP  = 0.1;
+
+    int running = 1;
+    SDL_Event event;
 
     while (running)
     {
-        // Handle events
         while (SDL_PollEvent(&event))
         {
             if (event.type == SDL_QUIT)
@@ -204,57 +201,59 @@ int main(int argc, char *argv[])
             {
                 switch (event.key.keysym.sym)
                 {
+                // Temperature: UP / DOWN
                 case SDLK_UP:
                     T += T_STEP;
-                    if (T > T_MAX)
-                        T = T_MAX;
+                    if (T > T_MAX) T = T_MAX;
                     break;
                 case SDLK_DOWN:
                     T -= T_STEP;
-                    if (T < T_MIN)
-                        T = T_MIN;
+                    if (T < T_MIN) T = T_MIN;
+                    break;
+                // Magnetic field: RIGHT / LEFT
+                case SDLK_RIGHT:
+                    h += H_STEP;
+                    if (h > H_MAX) h = H_MAX;
+                    break;
+                case SDLK_LEFT:
+                    h -= H_STEP;
+                    if (h < H_MIN) h = H_MIN;
                     break;
                 }
             }
         }
 
-        // Monte Carlo sweep with current temperature
-        update_grid(grid, HEIGHT, WIDTH, T);
+        update_grid(grid, HEIGHT, WIDTH, T, h);
 
-        // Convert liq_phases to pixels
+        // Map spins to pixels
         for (int y = 0; y < HEIGHT; y++)
         {
             for (int x = 0; x < WIDTH; x++)
             {
-                int liq_phase = grid[IDX(x, y)];
                 uint8_t r, g, b;
-                if (liq_phase == 1)
+                if (grid[IDX(x, y)] == 1)
                 {
-                    r = 255;
-                    g = 045;
-                    b = 001;
+                    r = 255; g = 045; b = 001;   // spin-up  → orange-red
                 }
                 else
                 {
-                    r = 073;
-                    g = 016;
-                    b = 230;
+                    r = 073; g = 016; b = 230;   // spin-down → blue-purple
                 }
-
-                uint32_t pixel = (255 << 24) | (b << 16) | (g << 8) | r;
-                pixel_buffer[y * WIDTH + x] = pixel;
+                pixel_buffer[y * WIDTH + x] = (255u << 24) | (b << 16) | (g << 8) | r;
             }
         }
 
-        // Render everything
         SDL_UpdateTexture(texture, NULL, pixel_buffer, WIDTH * sizeof(uint32_t));
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
 
-        // Display temperature in top‑left corner
+        // HUD: temperature (top-left) and magnetic field (below it)
         char temp_text[32];
-        snprintf(temp_text, sizeof(temp_text), "T = %.2f", T);
-        render_text(renderer, font, temp_text, 10, 10);
+        char field_text[32];
+        snprintf(temp_text,  sizeof(temp_text),  "T = %.2f  [Up/Down]",    T);
+        snprintf(field_text, sizeof(field_text), "B = %+.2f  [Left/Right]", h);
+        render_text(renderer, font, temp_text,  10, 10);
+        render_text(renderer, font, field_text, 10, 40);   // 30 px below T line
 
         SDL_RenderPresent(renderer);
         SDL_Delay(10);
