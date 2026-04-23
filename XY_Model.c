@@ -134,20 +134,16 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
 
 void update_pixels(double *grid, int height, int width, uint32_t *pixels)
 {
-    for (int parity = 0; parity <= 1; parity++)
+
+#pragma omp parallelfor collapse(2) schedule(static)
+    for (int y = 0; y < HEIGHT; y++)
     {
-#pragma omp for collapse(2) schedule(static)
-        for (int y = 0; y < HEIGHT; y++)
+        for (int x = 0; x < WIDTH; x++)
         {
-            for (int x = 0; x < WIDTH; x++)
-            {
-                if (((x + y) & 1) != parity)
-                    continue;
-                double hue = grid[IDX(x, y)] / TWO_PI;
-                uint8_t r, g, b;
-                hsv_to_rgb(hue, &r, &g, &b);
-                pixels[y * WIDTH + x] = (255u << 24) | (b << 16) | (g << 8) | r;
-            }
+            double hue = grid[IDX(x, y)] / TWO_PI;
+            uint8_t r, g, b;
+            hsv_to_rgb(hue, &r, &g, &b);
+            pixels[y * WIDTH + x] = (255u << 24) | (b << 16) | (g << 8) | r;
         }
     }
 }
