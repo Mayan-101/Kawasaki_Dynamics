@@ -7,7 +7,9 @@
 #include <time.h>
 #include <omp.h>
 #include "utils/pcg_random.h"
+#include "gpu_loader.h"
 
+#define M_PI 3.14159265358979323846264338327950288
 #define WIDTH 800
 #define HEIGHT 800
 
@@ -33,50 +35,25 @@ static inline void hsv_to_rgb(double hue, uint8_t *r, uint8_t *g, uint8_t *b)
     double q = 1.0 - f;
     switch (i)
     {
-    case 0:
-        *r = 255;
-        *g = (uint8_t)(f * 255);
-        *b = 0;
-        break;
-    case 1:
-        *r = (uint8_t)(q * 255);
-        *g = 255;
-        *b = 0;
-        break;
-    case 2:
-        *r = 0;
-        *g = 255;
-        *b = (uint8_t)(f * 255);
-        break;
-    case 3:
-        *r = 0;
-        *g = (uint8_t)(q * 255);
-        *b = 255;
-        break;
-    case 4:
-        *r = (uint8_t)(f * 255);
-        *g = 0;
-        *b = 255;
-        break;
-    case 5:
-        *r = 255;
-        *g = 0;
-        *b = (uint8_t)(q * 255);
-        break;
-    default:
-        *r = 0;
-        *g = 0;
-        *b = 0;
+    case 0: *r = 255;              *g = (uint8_t)(f * 255); *b = 0;                break;
+    case 1: *r = (uint8_t)(q*255); *g = 255;                *b = 0;                break;
+    case 2: *r = 0;                *g = 255;                *b = (uint8_t)(f*255);  break;
+    case 3: *r = 0;                *g = (uint8_t)(q*255);   *b = 255;              break;
+    case 4: *r = (uint8_t)(f*255); *g = 0;                  *b = 255;              break;
+    case 5: *r = 255;              *g = 0;                   *b = (uint8_t)(q*255); break;
+    default: *r = 0; *g = 0; *b = 0;
     }
 }
 
+// CPU fallback — XY model Metropolis 
 void update_grid(double *grid, int height, int width, double T, double h)
 {
     for (int parity = 0; parity <= 1; parity++)
     {
 #pragma omp parallel
         {
-            uint64_t seed = (uint64_t)time(NULL) ^ ((uint64_t)omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
+            uint64_t seed = (uint64_t)time(NULL)
+                          ^ ((uint64_t)omp_get_thread_num() * 0x9E3779B97F4A7C15ULL);
             pcg_seed(seed, 42);
 
 #pragma omp for collapse(2) schedule(static)
@@ -94,10 +71,14 @@ void update_grid(double *grid, int height, int width, double T, double h)
                     double tU = grid[IDX(x, wrap(y - 1, height))];
                     double tD = grid[IDX(x, wrap(y + 1, height))];
 
-                    double delta = (pcg_rand_double() * 2.0 - 1.0) * DELTA_MAX;
+                    double delta     = (pcg_rand_double() * 2.0 - 1.0) * DELTA_MAX;
                     double theta_new = wrap_angle(theta + delta);
 
-                    double dE = -((cos(theta_new - tL) - cos(theta - tL)) + (cos(theta_new - tR) - cos(theta - tR)) + (cos(theta_new - tU) - cos(theta - tU)) + (cos(theta_new - tD) - cos(theta - tD))) - h * (cos(theta_new) - cos(theta));
+                    double dE = -((cos(theta_new - tL) - cos(theta - tL))
+                                + (cos(theta_new - tR) - cos(theta - tR))
+                                + (cos(theta_new - tU) - cos(theta - tU))
+                                + (cos(theta_new - tD) - cos(theta - tD)))
+                               - h * (cos(theta_new) - cos(theta));
 
                     if (dE <= 0.0 || (T > 0.0 && pcg_rand_double() < exp(-dE / T)))
                         grid[IDX(x, y)] = theta_new;
@@ -117,8 +98,8 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
 {
     if (!font)
         return;
-    SDL_Color green = {0, 0, 0, 255};
-    SDL_Surface *surf = TTF_RenderText_Solid(font, text, green);
+    SDL_Color black = {0, 0, 0, 255};
+    SDL_Surface *surf = TTF_RenderText_Solid(font, text, black);
     if (!surf)
         return;
     SDL_Texture *tex = SDL_CreateTextureFromSurface(renderer, surf);
@@ -132,18 +113,18 @@ void render_text(SDL_Renderer *renderer, TTF_Font *font, const char *text, int x
     SDL_DestroyTexture(tex);
 }
 
+
 void update_pixels(double *grid, int height, int width, uint32_t *pixels)
 {
-
 #pragma omp parallel for collapse(2) schedule(static)
-    for (int y = 0; y < HEIGHT; y++)
+    for (int y = 0; y < height; y++)
     {
-        for (int x = 0; x < WIDTH; x++)
+        for (int x = 0; x < width; x++)
         {
             double hue = grid[IDX(x, y)] / TWO_PI;
             uint8_t r, g, b;
             hsv_to_rgb(hue, &r, &g, &b);
-            pixels[y * WIDTH + x] = (255u << 24) | (b << 16) | (g << 8) | r;
+            pixels[y * width + x] = (255u << 24) | (b << 16) | (g << 8) | r;
         }
     }
 }
@@ -156,30 +137,51 @@ int main(int argc, char *argv[])
         printf("Running with %d OpenMP threads\n", omp_get_num_threads());
     }
 
-    double *grid = (double *)malloc(HEIGHT * WIDTH * sizeof(double));
-    if (!grid)
+
+    GpuPlugin gpu = {0};
+    bool use_gpu = gpu_plugin_load(&gpu, "ising_gpu.dll");
+
+
+    double *host_grid = (double *)malloc(HEIGHT * WIDTH * sizeof(double));
+    if (!host_grid)
     {
         fprintf(stderr, "Memory allocation failed\n");
         return 1;
     }
-    init_random_grid(grid, HEIGHT, WIDTH);
+    init_random_grid(host_grid, HEIGHT, WIDTH);
 
+    GpuState *gpu_state = NULL;
+    if (use_gpu)
+    {
+        gpu_state = gpu.init(HEIGHT, WIDTH);
+        gpu.upload_grid(gpu_state, host_grid);
+        free(host_grid);      
+        host_grid = NULL;
+        printf("Simulation running on GPU\n");
+    }
+    else
+    {
+        printf("GPU unavailable -- running on CPU\n");
+    }
+
+    
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
         fprintf(stderr, "SDL_Init Error: %s\n", SDL_GetError());
-        free(grid);
+        if (host_grid) free(host_grid);
         return 1;
     }
     if (TTF_Init() < 0)
         fprintf(stderr, "TTF_Init Error: %s\n", TTF_GetError());
 
-    SDL_Window *window = SDL_CreateWindow("XY Model — continuous spins",
-                                          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                          WIDTH, HEIGHT, SDL_WINDOW_SHOWN);
+    SDL_Window *window = SDL_CreateWindow(
+        use_gpu ? "XY Model -- GPU" : "XY Model -- CPU",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        WIDTH, HEIGHT, SDL_WINDOW_SHOWN);
     if (!window)
     {
         SDL_Quit();
-        free(grid);
+        if (host_grid) free(host_grid);
         return 1;
     }
 
@@ -188,7 +190,7 @@ int main(int argc, char *argv[])
     {
         SDL_DestroyWindow(window);
         SDL_Quit();
-        free(grid);
+        if (host_grid) free(host_grid);
         return 1;
     }
 
@@ -207,7 +209,7 @@ int main(int argc, char *argv[])
         TTF_CloseFont(font);
         TTF_Quit();
         SDL_Quit();
-        free(grid);
+        if (host_grid) free(host_grid);
         return 1;
     }
 
@@ -216,8 +218,8 @@ int main(int argc, char *argv[])
     double T = 0.89;
     double h = 0.0;
 
-    const double T_MIN = 0.0, T_MAX = 5.0, T_STEP = 0.05;
-    const double H_MIN = -5.0, H_MAX = 5.0, H_STEP = 0.1;
+    const double T_MIN = 0.0,  T_MAX = 5.0,  T_STEP = 0.05;
+    const double H_MIN = -5.0, H_MAX = 5.0,  H_STEP = 0.1;
 
     int running = 1;
     SDL_Event event;
@@ -234,40 +236,33 @@ int main(int argc, char *argv[])
             {
                 switch (event.key.keysym.sym)
                 {
-                case SDLK_UP:
-                    T += T_STEP;
-                    if (T > T_MAX)
-                        T = T_MAX;
-                    break;
-                case SDLK_DOWN:
-                    T -= T_STEP;
-                    if (T < T_MIN)
-                        T = T_MIN;
-                    break;
-                case SDLK_RIGHT:
-                    h += H_STEP;
-                    if (h > H_MAX)
-                        h = H_MAX;
-                    break;
-                case SDLK_LEFT:
-                    h -= H_STEP;
-                    if (h < H_MIN)
-                        h = H_MIN;
-                    break;
+                case SDLK_UP:    T += T_STEP; if (T > T_MAX) T = T_MAX; break;
+                case SDLK_DOWN:  T -= T_STEP; if (T < T_MIN) T = T_MIN; break;
+                case SDLK_RIGHT: h += H_STEP; if (h > H_MAX) h = H_MAX; break;
+                case SDLK_LEFT:  h -= H_STEP; if (h < H_MIN) h = H_MIN; break;
                 }
             }
         }
 
-        update_grid(grid, HEIGHT, WIDTH, T, h);
-        update_pixels(grid, HEIGHT, WIDTH, pixels);
+    
+        if (use_gpu)
+        {
+            gpu.update_grid(gpu_state, T, h);      
+            gpu.render_pixels(gpu_state, pixels);  
+        }
+        else
+        {
+            update_grid(host_grid, HEIGHT, WIDTH, T, h);
+            update_pixels(host_grid, HEIGHT, WIDTH, pixels);
+        }
+
 
         SDL_UpdateTexture(texture, NULL, pixels, WIDTH * sizeof(uint32_t));
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
 
-        // HUD
         char buf[48];
-        snprintf(buf, sizeof(buf), "T = %.2f  [Up/Down]", T);
+        snprintf(buf, sizeof(buf), "T = %.2f  [Up/Down]",     T);
         render_text(renderer, font, buf, 10, 10);
         snprintf(buf, sizeof(buf), "B = %+.2f  [Left/Right]", h);
         render_text(renderer, font, buf, 10, 40);
@@ -276,8 +271,17 @@ int main(int argc, char *argv[])
         SDL_Delay(10);
     }
 
+    if (use_gpu)
+    {
+        gpu.destroy(gpu_state);
+        gpu_plugin_unload();
+    }
+    else
+    {
+        free(host_grid);
+    }
+
     free(pixels);
-    free(grid);
     SDL_DestroyTexture(texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
