@@ -10,6 +10,11 @@ A real-time, interactive simulator for two classical spin models from statistica
 > **TODO:** 
 
 
+<img width="800" height="450" alt="VideoProject2-ezgif com-video-to-gif-converter" src="https://github.com/user-attachments/assets/d8a6e84b-8eee-4586-8cdd-15600579f198" />
+
+
+
+
 
 ---
 
