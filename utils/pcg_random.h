@@ -3,10 +3,8 @@
 
 #include <stdint.h>
 
-
 extern uint64_t pcg_state;
 extern uint64_t pcg_inc;
-
 
 void pcg_seed(uint64_t initstate, uint64_t initseq);
 uint32_t pcg_rand(void);

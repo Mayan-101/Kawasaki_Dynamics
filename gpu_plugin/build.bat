@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set VCVARS="C:\Program Files (x86)\Microsoft Visual Studio\2017\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+set VCVARS="C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
 
 if not exist %VCVARS% (
     echo ERROR: vcvarsall.bat not found at %VCVARS%

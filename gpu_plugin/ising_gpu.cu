@@ -28,8 +28,6 @@ struct GpuState
     curandState *d_rng;
 };
 
-
-
 __global__ void k_init_rng(curandState *states, int height, int width,
                            unsigned long long seed)
 {
@@ -129,14 +127,10 @@ __global__ void k_render(const double *grid, uint32_t *pixels,
     pixels[y * width + x] = (255u << 24) | (b << 16) | (g << 8) | r;
 }
 
-
-
 static dim3 blocks(int w, int h, dim3 t)
 {
     return dim3((w + t.x - 1) / t.x, (h + t.y - 1) / t.y);
 }
-
-
 
 extern "C"
 {
@@ -194,5 +188,4 @@ extern "C"
                               s->height * s->width * sizeof(uint32_t),
                               cudaMemcpyDeviceToHost));
     }
-
-} 
+}
