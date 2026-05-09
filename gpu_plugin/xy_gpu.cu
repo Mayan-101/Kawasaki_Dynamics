@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <math.h>
 
+#define TWO_PI (2.0 * 3.14159265358979323846)
+#define DELTA_MAX (3.14159265358979323846 / 4.0)
+
 #define CUDA_CHECK(call)                                         \
     do                                                           \
     {                                                            \
@@ -17,13 +20,14 @@
         }                                                        \
     } while (0)
 
-struct IsingGpuState
+struct GpuState
 {
     int height, width;
-    int *d_grid;
+    double *d_grid;
     uint32_t *d_pixels;
     curandState *d_rng;
-    double *d_sum_m;
+    double *d_sum_x;
+    double *d_sum_y;
 };
 
 __global__ void k_init_rng(curandState *states, int height, int width,
@@ -37,7 +41,7 @@ __global__ void k_init_rng(curandState *states, int height, int width,
                 &states[y * width + x]);
 }
 
-__global__ void k_update(int *grid, int height, int width,
+__global__ void k_update(double *grid, int height, int width,
                          double T, double h, int parity, curandState *rng)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -50,22 +54,68 @@ __global__ void k_update(int *grid, int height, int width,
     int idx = y * width + x;
     curandState local = rng[idx];
 
-    int current = grid[idx];
-    int tL = grid[y * width + (x - 1 + width) % width];
-    int tR = grid[y * width + (x + 1) % width];
-    int tU = grid[((y - 1 + height) % height) * width + x];
-    int tD = grid[((y + 1) % height) * width + x];
+    double theta = grid[idx];
+    double tL = grid[y * width + (x - 1 + width) % width];
+    double tR = grid[y * width + (x + 1) % width];
+    double tU = grid[((y - 1 + height) % height) * width + x];
+    double tD = grid[((y + 1) % height) * width + x];
 
-    int neighbor_sum = tL + tR + tU + tD;
-    double delta_E = 2.0 * current * (neighbor_sum + h);
+    double delta = (curand_uniform_double(&local) * 2.0 - 1.0) * DELTA_MAX;
+    double theta_new = fmod(theta + delta + TWO_PI * 10.0, TWO_PI);
 
-    if (delta_E <= 0.0 || (T > 0.0 && curand_uniform_double(&local) < exp(-delta_E / T)))
-        grid[idx] = -current;
+    double dE = -((cos(theta_new - tL) - cos(theta - tL)) + (cos(theta_new - tR) - cos(theta - tR)) + (cos(theta_new - tU) - cos(theta - tU)) + (cos(theta_new - tD) - cos(theta - tD))) - h * (cos(theta_new) - cos(theta));
+
+    if (dE <= 0.0 || (T > 0.0 && curand_uniform_double(&local) < exp(-dE / T)))
+        grid[idx] = theta_new;
 
     rng[idx] = local;
 }
 
-__global__ void k_render(const int *grid, uint32_t *pixels,
+__device__ void d_hsv_to_rgb(double hue, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    double h6 = hue * 6.0;
+    int i = (int)h6 % 6;
+    double f = h6 - (int)h6, q = 1.0 - f;
+    switch (i)
+    {
+    case 0:
+        *r = 255;
+        *g = (uint8_t)(f * 255);
+        *b = 0;
+        break;
+    case 1:
+        *r = (uint8_t)(q * 255);
+        *g = 255;
+        *b = 0;
+        break;
+    case 2:
+        *r = 0;
+        *g = 255;
+        *b = (uint8_t)(f * 255);
+        break;
+    case 3:
+        *r = 0;
+        *g = (uint8_t)(q * 255);
+        *b = 255;
+        break;
+    case 4:
+        *r = (uint8_t)(f * 255);
+        *g = 0;
+        *b = 255;
+        break;
+    case 5:
+        *r = 255;
+        *g = 0;
+        *b = (uint8_t)(q * 255);
+        break;
+    default:
+        *r = 0;
+        *g = 0;
+        *b = 0;
+    }
+}
+
+__global__ void k_render(const double *grid, uint32_t *pixels,
                          int height, int width)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -73,13 +123,9 @@ __global__ void k_render(const int *grid, uint32_t *pixels,
     if (x >= width || y >= height)
         return;
 
-    int current = grid[y * width + x];
+    double hue = grid[y * width + x] / TWO_PI;
     uint8_t r, g, b;
-    if (current == 1) {
-        r = 255; g = 45; b = 1;
-    } else {
-        r = 73; g = 16; b = 230;
-    }
+    d_hsv_to_rgb(hue, &r, &g, &b);
     pixels[y * width + x] = (255u << 24) | (b << 16) | (g << 8) | r;
 }
 
@@ -88,33 +134,40 @@ static dim3 blocks(int w, int h, dim3 t)
     return dim3((w + t.x - 1) / t.x, (h + t.y - 1) / t.y);
 }
 
-__global__ void k_calc_M(const int *grid, int height, int width, double *d_sum_m)
+__global__ void k_calc_M(const double *grid, int height, int width, double *d_sum_x, double *d_sum_y)
 {
     extern __shared__ double sdata[]; 
-    double *s_m = sdata;
+    double *s_x = sdata;
+    double *s_y = sdata + blockDim.x * blockDim.y;
 
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    double my_m = 0.0;
+    double my_x = 0.0;
+    double my_y = 0.0;
 
     if (x < width && y < height) {
-        my_m = (double)grid[y * width + x];
+        double theta = grid[y * width + x];
+        my_x = cos(theta);
+        my_y = sin(theta);
     }
 
-    s_m[tid] = my_m;
+    s_x[tid] = my_x;
+    s_y[tid] = my_y;
     __syncthreads();
 
     for (int s = (blockDim.x * blockDim.y) / 2; s > 0; s >>= 1) {
         if (tid < s) {
-            s_m[tid] += s_m[tid + s];
+            s_x[tid] += s_x[tid + s];
+            s_y[tid] += s_y[tid + s];
         }
         __syncthreads();
     }
 
     if (tid == 0) {
-        atomicAdd(d_sum_m, s_m[0]);
+        atomicAdd(d_sum_x, s_x[0]);
+        atomicAdd(d_sum_y, s_y[0]);
     }
 }
 
@@ -122,16 +175,17 @@ extern "C"
 {
 
     __declspec(dllexport)
-    IsingGpuState *
+    GpuState *
     gpu_init(int height, int width)
     {
-        IsingGpuState *s = (IsingGpuState *)malloc(sizeof(IsingGpuState));
+        GpuState *s = (GpuState *)malloc(sizeof(GpuState));
         s->height = height;
         s->width = width;
-        CUDA_CHECK(cudaMalloc(&s->d_grid, height * width * sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&s->d_grid, height * width * sizeof(double)));
         CUDA_CHECK(cudaMalloc(&s->d_pixels, height * width * sizeof(uint32_t)));
         CUDA_CHECK(cudaMalloc(&s->d_rng, height * width * sizeof(curandState)));
-        CUDA_CHECK(cudaMalloc(&s->d_sum_m, sizeof(double)));
+        CUDA_CHECK(cudaMalloc(&s->d_sum_x, sizeof(double)));
+        CUDA_CHECK(cudaMalloc(&s->d_sum_y, sizeof(double)));
 
         dim3 t(16, 16);
         k_init_rng<<<blocks(width, height, t), t>>>(s->d_rng, height, width, 42ULL);
@@ -139,23 +193,24 @@ extern "C"
         return s;
     }
 
-    __declspec(dllexport) void gpu_destroy(IsingGpuState *s)
+    __declspec(dllexport) void gpu_destroy(GpuState *s)
     {
         cudaFree(s->d_grid);
         cudaFree(s->d_pixels);
         cudaFree(s->d_rng);
-        cudaFree(s->d_sum_m);
+        cudaFree(s->d_sum_x);
+        cudaFree(s->d_sum_y);
         free(s);
     }
 
-    __declspec(dllexport) void gpu_upload_grid(IsingGpuState *s, const int *host_grid)
+    __declspec(dllexport) void gpu_upload_grid(GpuState *s, const double *host_grid)
     {
         CUDA_CHECK(cudaMemcpy(s->d_grid, host_grid,
-                              s->height * s->width * sizeof(int),
+                              s->height * s->width * sizeof(double),
                               cudaMemcpyHostToDevice));
     }
 
-    __declspec(dllexport) void gpu_update_grid(IsingGpuState *s, double T, double h)
+    __declspec(dllexport) void gpu_update_grid(GpuState *s, double T, double h)
     {
         dim3 t(16, 16);
         dim3 b = blocks(s->width, s->height, t);
@@ -166,7 +221,7 @@ extern "C"
         }
     }
 
-    __declspec(dllexport) void gpu_render_pixels(IsingGpuState *s, uint32_t *host_pixels)
+    __declspec(dllexport) void gpu_render_pixels(GpuState *s, uint32_t *host_pixels)
     {
         dim3 t(16, 16);
         k_render<<<blocks(s->width, s->height, t), t>>>(
@@ -177,20 +232,23 @@ extern "C"
                               cudaMemcpyDeviceToHost));
     }
 
-    __declspec(dllexport) double gpu_measure_M(IsingGpuState *s)
+    __declspec(dllexport) double gpu_measure_M(GpuState *s)
     {
         double zero = 0.0;
-        CUDA_CHECK(cudaMemcpy(s->d_sum_m, &zero, sizeof(double), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(s->d_sum_x, &zero, sizeof(double), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(s->d_sum_y, &zero, sizeof(double), cudaMemcpyHostToDevice));
 
         dim3 t(16, 16);
-        int shared_mem_size = t.x * t.y * sizeof(double);
-        k_calc_M<<<blocks(s->width, s->height, t), t, shared_mem_size>>>(s->d_grid, s->height, s->width, s->d_sum_m);
+        int shared_mem_size = 2 * t.x * t.y * sizeof(double);
+        k_calc_M<<<blocks(s->width, s->height, t), t, shared_mem_size>>>(s->d_grid, s->height, s->width, s->d_sum_x, s->d_sum_y);
         CUDA_CHECK(cudaDeviceSynchronize());
 
-        double sum_m = 0.0;
-        CUDA_CHECK(cudaMemcpy(&sum_m, s->d_sum_m, sizeof(double), cudaMemcpyDeviceToHost));
+        double sum_x = 0.0;
+        double sum_y = 0.0;
+        CUDA_CHECK(cudaMemcpy(&sum_x, s->d_sum_x, sizeof(double), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(&sum_y, s->d_sum_y, sizeof(double), cudaMemcpyDeviceToHost));
 
-        double M = sum_m / (double)(s->height * s->width);
+        double M = sqrt(sum_x * sum_x + sum_y * sum_y) / (double)(s->height * s->width);
         return M;
     }
 }

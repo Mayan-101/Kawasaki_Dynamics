@@ -112,31 +112,28 @@ This gives full data-parallelism with no locks and no data races, while still co
 
 ## GPU Compilation and Plugin Architecture
 
-### Two-Step Build
+### Dual-Plugin System
 
-The GPU backend is decoupled from the main executable through a **DLL plugin system**, allowing the C application to run without a CUDA-capable GPU.
+The GPU backend is decoupled from the main executable through a **DLL plugin system**, allowing the C application to run without a CUDA-capable GPU and to swap out physics models seamlessly. We maintain two separate plugins:
+- `xy_gpu.dll`: Evaluates the continuous-spin XY model (using double-precision floats).
+- `ising.dll`: Evaluates the discrete Ising model (using integer spins).
 
-**Step 1 — Build the CUDA DLL** (`gpu_plugin/build.bat`):
+**Step 1 — Build the CUDA DLLs** (`gpu_plugin/build.bat`):
 
-```
-nvcc.exe  ising_gpu.cu  --shared  -o ising_gpu.dll
-          -arch=sm_xx              # Pascal-class GPU (61 for me)
-          -lcurand                 # NVIDIA random number library
-          --compiler-options /O2,/MT
-```
-
-`nvcc` is NVIDIA's compiler driver. It separates device code (functions marked `__global__` and `__device__`) from host code and routes each to the appropriate compiler — PTX assembly for the GPU, and MSVC (`cl.exe`) for the CPU portions. The result is a single `.dll` containing both the host-side management code and the embedded GPU binary.
-
-The CUDA kernels implement the same checkerboard algorithm. Each CUDA thread maps to one lattice site via its 2D block/thread index, (THIS WILL BE OPTIMISED FURTHER).
-
-**Step 2 — Build the main executable** (`build_main.bat`):
-
-```
-gcc  XY_model_gpu.c  gpu_loader.c  utils/pcg_random.c
-     -lSDL2  -lSDL2_ttf  -lm  -fopenmp  -O2  -std=c11
+```bat
+cd gpu_plugin
+build.bat
 ```
 
-The main binary is compiled with GCC (MinGW/UCRT64) and has **no CUDA dependency** at compile time. It only needs `ising_gpu.dll` to be present at runtime.
+This invokes `nvcc.exe` to compile both `xy_gpu.cu` and `ising_gpu.cu`. `nvcc` separates device code from host code and routes each to the appropriate compiler — PTX assembly for the GPU, and MSVC (`cl.exe`) for the CPU portions. The result is two `.dll` files containing both the host-side management code and the embedded GPU binaries.
+
+**Step 2 — Build the main executables** (`build_main.bat`):
+
+```bat
+build_main.bat
+```
+
+The main binaries are compiled with GCC (MinGW/UCRT64) and have **no CUDA dependency** at compile time. They only need the `.dll` plugins to be present at runtime.
 
 ### Runtime DLL Loading
 
@@ -171,7 +168,33 @@ The pixel buffer is the only data that crosses the PCIe bus every frame. The spi
 
 ---
 
-## Building
+## Hysteresis Sweeps & Python Plotter
+
+Alongside the interactive visualisers, this project includes highly-optimised, non-interactive "sweepers" that calculate the Net Magnetisation ($M$) across a sweeping external magnetic field ($h$) to generate magnetic hysteresis loops.
+
+These sweepers utilise the GPU to calculate parallel reductions (via CUDA `atomicAdd`) to find the total sum of the grid's magnetisation extremely quickly. They output the results as `.csv` files.
+
+You can instantly generate beautiful `matplotlib` graphs from these CSV files by using the included python script in the `plotter/` virtual environment.
+
+---
+
+## Execution Scripts
+
+To make running and building everything frictionless, a `Scripts/` directory is provided. You can double-click any of these `.bat` files from Windows File Explorer, or run them from the terminal:
+
+| Script | Purpose |
+|---|---|
+| `build_all.bat` | Compiles the `xy_gpu.dll` and `ising.dll` CUDA plugins and completely rebuilds all the `C` executables. |
+| `run_ising_interactive.bat` | Launches the classic `Ising.exe` simulation. |
+| `run_xy_interactive.bat` | Launches the `xy_interactive.exe` (XY Model GPU). |
+| `run_ising_cpu_hysteresis.bat` | Uses the CPU to run the Ising model and generate `ising_hysteresis.csv`. |
+| `run_ising_gpu_hysteresis.bat` | Uses the GPU to run the pure integer Ising model and generate `ising_gpu_hysteresis.csv`. |
+| `run_xy_gpu_hysteresis.bat` | Uses the GPU to run the XY model and generate `xy_hysteresis.csv`. |
+| `run_plotter.bat` | Feeds the generated `.csv` files into the Python script to produce graphical plots. |
+
+---
+
+## Building Manually
 
 ### Prerequisites
 
@@ -182,25 +205,24 @@ The pixel buffer is the only data that crosses the PCIe bus every frame. The spi
 | NVIDIA CUDA Toolkit v12.x | Compile the GPU plugin DLL |
 | Visual Studio Build Tools (MSVC) | Required by `nvcc` for host compilation |
 
-### Build the GPU Plugin (requires CUDA)
+### Build the GPU Plugins (requires CUDA)
 
-```
+```bat
 cd gpu_plugin
 build.bat
 ```
 
-This produces `ising_gpu.dll` in the project root.
+This produces `xy_gpu.dll` and `ising.dll` in the project root.
 
-### Build the Main Executable
+### Build the Main Executables
 
-```
+```bat
 build_main.bat
-Kawaski_Dynamics.exe
 ```
 
-This produces `Kawasaki_Dynamics.exe`. The build script produces `ising_gpu.dll` at root.
+This produces `xy_interactive.exe` and `Ising.exe`. 
 
-> If you do not have a CUDA-capable GPU, skip the first step. The application will detect the missing DLL at startup and fall back to OpenMP automatically.
+> If you do not have a CUDA-capable GPU, skip the first step. The application will detect the missing DLLs at startup and fall back to OpenMP automatically.
 
 ---
 

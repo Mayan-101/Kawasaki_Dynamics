@@ -159,7 +159,7 @@ int main(int argc, char *argv[])
     }
 
     GpuPlugin gpu = {0};
-    bool use_gpu = gpu_plugin_load(&gpu, "ising_gpu.dll");
+    bool use_gpu = gpu_plugin_load(&gpu, "xy_gpu.dll");
 
     double *host_grid = (double *)malloc(HEIGHT * WIDTH * sizeof(double));
     if (!host_grid)

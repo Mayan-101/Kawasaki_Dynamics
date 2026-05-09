@@ -8,13 +8,14 @@ pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(SDL2_ttf REQUIRED)
 find_package(OpenMP REQUIRED)
 
-add_executable(Kawasaki_Dynamics
-    Ising.c
+add_executable(xy_interactive
+    XY_model_gpu.c
+    gpu_loader.c
     utils/pcg_random.c
 )
 
-target_include_directories(Kawasaki_Dynamics PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_libraries(Kawasaki_Dynamics
+target_include_directories(xy_interactive PRIVATE ${SDL2_INCLUDE_DIRS})
+target_link_libraries(xy_interactive
     ${SDL2_LIBRARIES}
     SDL2_ttf::SDL2_ttf
     m
@@ -22,5 +23,5 @@ target_link_libraries(Kawasaki_Dynamics
 )
 
 if(MINGW)
-    set_target_properties(Kawasaki_Dynamics PROPERTIES LINK_FLAGS "-mconsole")
+    set_target_properties(xy_interactive PROPERTIES LINK_FLAGS "-mconsole")
 endif()

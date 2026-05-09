@@ -29,6 +29,7 @@ bool gpu_plugin_load(GpuPlugin *p, const char *dll_path)
     BIND(p, pfn_gpu_upload_grid,   upload_grid)
     BIND(p, pfn_gpu_update_grid,   update_grid)
     BIND(p, pfn_gpu_render_pixels, render_pixels)
+    BIND(p, pfn_gpu_measure_M,     measure_M)
 
     p->loaded = true;
     printf("gpu_loader: loaded \"%s\"\n", dll_path);

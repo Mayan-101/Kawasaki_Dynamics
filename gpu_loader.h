@@ -13,6 +13,7 @@ typedef void (*pfn_gpu_destroy)(GpuState *s);
 typedef void (*pfn_gpu_upload_grid)(GpuState *s, const double *host_grid);
 typedef void (*pfn_gpu_update_grid)(GpuState *s, double T, double h);
 typedef void (*pfn_gpu_render_pixels)(GpuState *s, uint32_t *host_pixels);
+typedef double (*pfn_gpu_measure_M)(GpuState *s);
 
 typedef struct
 {
@@ -21,6 +22,7 @@ typedef struct
     pfn_gpu_upload_grid upload_grid;
     pfn_gpu_update_grid update_grid;
     pfn_gpu_render_pixels render_pixels;
+    pfn_gpu_measure_M measure_M;
     bool loaded;
 } GpuPlugin;
 

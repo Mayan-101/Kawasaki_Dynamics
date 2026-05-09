@@ -13,19 +13,25 @@ if not exist build mkdir build
     utils/pcg_random.c           ^
     -I"%SDL_INC%"                ^
     -L"%SDL_LIB%"                ^
-    -o Kawasaki_Dynamics.exe ^
     -lSDL2                       ^
     -lSDL2_ttf                   ^
     -lm                          ^
     -fopenmp                     ^
     -O2                          ^
-    -std=c11                     ^
+    -o xy_interactive.exe ^
+    -O2 ^
+    -fopenmp ^
+    -std=c11 ^
     -mconsole
 
 if %ERRORLEVEL% == 0 (
-    echo Done: build\Kawasaki_Dynamics.exe
-    copy ising_gpu.dll build\ising_gpu.dll >nul
-    echo Copied ising_gpu.dll to build\
+    if not exist build mkdir build
+    move xy_interactive.exe build\xy_interactive.exe >nul
+    echo Done: build\xy_interactive.exe
+    copy xy_gpu.dll build\xy_gpu.dll >nul
+    echo Copied xy_gpu.dll to build\
+    copy ising.dll build\ising.dll >nul
+    echo Copied ising.dll to build\
 ) else (
     echo FAILED
 )
