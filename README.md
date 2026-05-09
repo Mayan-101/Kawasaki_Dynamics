@@ -1,4 +1,4 @@
-# Kawasaki Dynamics — Interactive Spin Model Simulator
+# Interactive Spin Model Simulator
 
 A real-time, interactive simulator for two classical spin models from statistical mechanics — the **2D Ising model** and the **XY model** — rendered live at 800×800 pixels using SDL2. The simulation runs on CPU threads via OpenMP, with an optional GPU backend compiled as a CUDA DLL for massively parallel execution.
 
